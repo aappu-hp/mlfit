@@ -47,8 +47,8 @@ def _get_apple_chip_name() -> str:
         )
         if result.returncode == 0:
             data = json.loads(result.stdout)
-            hw = data.get("SPHardwareDataType", [{}])[0]
-            chip = hw.get("chip_type", "")
+            hardware = data.get("SPHardwareDataType", [{}])[0]
+            chip = hardware.get("chip_type", "")
             if chip:
                 return chip
     except Exception:

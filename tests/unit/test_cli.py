@@ -72,7 +72,7 @@ def _make_result_cuda() -> RecommendResult:
 
     fits, est, headroom = check_fits(model, hw)
     return RecommendResult(hardware=hw, model=model, configs=configs,
-                           fits=fits, quantized_alternatives=[])
+                           is_feasible=fits, quantized_alternatives=[])
 
 
 def _make_result_mps() -> RecommendResult:
@@ -111,7 +111,7 @@ def _make_result_mps() -> RecommendResult:
 
     fits, est, headroom = check_fits(model, hw)
     return RecommendResult(hardware=hw, model=model, configs=configs,
-                           fits=fits, quantized_alternatives=[])
+                           is_feasible=fits, quantized_alternatives=[])
 
 
 def _capture_render(result: RecommendResult) -> str:
@@ -168,7 +168,7 @@ class TestJSONOutput(unittest.TestCase):
     def test_top_level_keys_present(self):
         d = self.result.to_dict()
         for key in ("mlfit_version", "timestamp", "hardware", "model",
-                    "fits", "configs", "quantized_alternatives"):
+                    "is_feasible", "configs", "quantized_alternatives"):
             self.assertIn(key, d, f"Missing top-level key: {key}")
 
     def test_configs_array_is_ranked(self):
@@ -200,7 +200,7 @@ class TestJSONOutput(unittest.TestCase):
 
     def test_fits_is_bool(self):
         d = self.result.to_dict()
-        self.assertIsInstance(d["fits"], bool)
+        self.assertIsInstance(d["is_feasible"], bool)
 
     def test_vllm_config_has_required_params(self):
         d = self.result.to_dict()

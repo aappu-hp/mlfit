@@ -8,8 +8,8 @@ from mlfit._version import __version__
 console = Console()
 
 
-def render_header():
-    """Print the mlfit banner."""
+def render_header() -> None:
+    """Print the mlfit banner to the console."""
     console.print(Panel(
         f"[bold cyan]mlfit v{__version__}[/bold cyan] — Universal Model Deployment Advisor",
         border_style="cyan",
@@ -17,11 +17,15 @@ def render_header():
     ))
 
 
-def render_hardware_panel(hw):
-    """Render the hardware summary panel."""
-    if hw.gpus:
-        if hw.gpu_backend == "mps":
-            g = hw.gpus[0]
+def render_hardware_panel(hardware) -> None:
+    """Render the hardware summary panel to the console.
+
+    Args:
+        hardware: HardwareProfile containing GPU, CPU, RAM, and disk information.
+    """
+    if hardware.gpus:
+        if hardware.gpu_backend == "mps":
+            g = hardware.gpus[0]
             gpu_line = (
                 f"[bold]GPU[/bold]   {g.name} · Unified Memory · "
                 f"{g.vram_total_gb:.1f} GB total · {g.vram_free_gb:.1f} GB free\n"
@@ -29,7 +33,7 @@ def render_hardware_panel(hw):
             )
         else:
             gpu_lines = []
-            for g in hw.gpus:
+            for g in hardware.gpus:
                 gpu_lines.append(
                     f"[bold]GPU[/bold]   {g.name} · "
                     f"{g.vram_total_gb:.1f} GB total · {g.vram_free_gb:.1f} GB free"
@@ -38,26 +42,33 @@ def render_hardware_panel(hw):
     else:
         gpu_line = "[bold]GPU[/bold]   [dim]None detected[/dim]"
 
-    if hw.has_avx512:
+    if hardware.has_avx512:
         avx_flag = "AVX512"
-    elif hw.has_avx2:
+    elif hardware.has_avx2:
         avx_flag = "AVX2"
-    elif hw.has_avx:
+    elif hardware.has_avx:
         avx_flag = "AVX"
     else:
         avx_flag = "none"
 
     content = (
         f"{gpu_line}\n"
-        f"[bold]CPU[/bold]   {hw.cpu_cores} cores / {hw.cpu_threads} threads · {avx_flag}\n"
-        f"[bold]RAM[/bold]   {hw.ram_gb:.1f} GB system memory\n"
-        f"[bold]Disk[/bold]  {hw.disk_free_gb:.0f} GB free"
+        f"[bold]CPU[/bold]   {hardware.cpu_cores} cores / {hardware.cpu_threads} threads · {avx_flag}\n"
+        f"[bold]RAM[/bold]   {hardware.ram_gb:.1f} GB system memory\n"
+        f"[bold]Disk[/bold]  {hardware.disk_free_gb:.0f} GB free"
     )
     console.print(Panel(content, title="[bold]Hardware[/bold]", border_style="blue"))
 
 
-def render_model_panel(model, fits: bool, estimated_vram: float, headroom: float):
-    """Render the model analysis panel."""
+def render_model_panel(model, fits: bool, estimated_vram: float, headroom: float) -> None:
+    """Render the model analysis panel to the console.
+
+    Args:
+        model: ModelProfile with architecture and size metadata.
+        fits: Whether the model fits in available VRAM or RAM.
+        estimated_vram: Predicted VRAM requirement in GB.
+        headroom: Available VRAM/RAM minus estimated requirement, in GB.
+    """
     fits_color = "green" if fits else "red"
     fits_icon = "✓ YES" if fits else "✗ NO"
 
@@ -91,8 +102,14 @@ def render_model_panel(model, fits: bool, estimated_vram: float, headroom: float
     ))
 
 
-def render_configs_table(configs, hw):
-    """Render the ranked configurations table."""
+def render_configs_table(configs, hardware) -> None:
+    """Render the ranked backend configurations table to the console.
+
+    Args:
+        configs: List of (FeasibilityScore, BackendConfig, BaseStrategy) tuples,
+                 sorted descending by feasibility score.
+        hardware: HardwareProfile — used to show hardware-specific warnings.
+    """
     if not configs:
         console.print("[yellow]⚠  No compatible backends found for this hardware.[/yellow]")
         return
@@ -126,14 +143,18 @@ def render_configs_table(configs, hw):
 
     console.print(table)
 
-    if hw.gpu_backend == "mps":
+    if hardware.gpu_backend == "mps":
         console.print(
             "\n[yellow]⚠  vLLM and TGI are not available on Apple Silicon (CUDA only).[/yellow]"
         )
 
 
-def render_best_command(config):
-    """Render the 'Best Command' panel."""
+def render_best_command(config) -> None:
+    """Render the 'Best Command' panel showing the top-ranked deploy command.
+
+    Args:
+        config: BackendConfig whose command field is displayed.
+    """
     console.print(Panel(
         f"[bold green]{config.command}[/bold green]",
         title=f"[bold]✓ Best Command ({config.backend})[/bold]",
@@ -207,19 +228,19 @@ def render_profile_result(result) -> None:
     """
     render_header()
 
-    hw = result.hardware
-    if hw.gpus:
-        gpu_line = f"[bold]GPU[/bold]   {hw.gpus[0].name}"
-        if hw.gpu_backend == "mps":
+    hardware = result.hardware
+    if hardware.gpus:
+        gpu_line = f"[bold]GPU[/bold]   {hardware.gpus[0].name}"
+        if hardware.gpu_backend == "mps":
             gpu_line += " · Unified Memory"
         else:
-            gpu_line += f" · {hw.gpus[0].vram_total_gb:.0f} GB"
+            gpu_line += f" · {hardware.gpus[0].vram_total_gb:.0f} GB"
     else:
         gpu_line = "[bold]GPU[/bold]   [dim]None[/dim]"
 
     hw_content = (
         f"{gpu_line}\n"
-        f"[bold]RAM[/bold]   {hw.ram_gb:.1f} GB"
+        f"[bold]RAM[/bold]   {hardware.ram_gb:.1f} GB"
     )
     console.print(Panel(
         hw_content,
@@ -228,8 +249,8 @@ def render_profile_result(result) -> None:
     ))
 
     vram_efficiency = (
-        result.peak_vram_gb / hw.gpus[0].vram_total_gb * 100
-        if hw.gpus else 0.0
+        result.peak_vram_gb / hardware.gpus[0].vram_total_gb * 100
+        if hardware.gpus else 0.0
     )
     mem_content = (
         f"[bold]Peak VRAM used[/bold]         {result.peak_vram_gb:.2f} GB\n"
@@ -277,22 +298,26 @@ def render_profile_result(result) -> None:
     )
 
 
-def render_recommend_result(result, verbose: bool = False):
-    """Full render of a recommend result."""
+def render_recommend_result(result) -> None:
+    """Render the full recommendation output: header, hardware, model, configs, and command.
+
+    Args:
+        result: RecommendResult from Advisor.recommend().
+    """
     render_header()
 
-    hw = result.hardware
+    hardware = result.hardware
     model = result.model
 
-    render_hardware_panel(hw)
-    render_model_panel(model, result.fits, result.estimated_vram_gb, result.headroom_gb)
+    render_hardware_panel(hardware)
+    render_model_panel(model, result.is_feasible, result.estimated_vram_gb, result.headroom_gb)
 
-    render_configs_table(result.configs, hw)
+    render_configs_table(result.configs, hardware)
 
     if result.best:
         render_best_command(result.best)
 
-    if not result.fits and result.quantized_alternatives:
+    if not result.is_feasible and result.quantized_alternatives:
         render_quant_alternatives(result.quantized_alternatives)
 
     console.print(f"\n[dim]ℹ  Run [cyan]`mlfit profile {model.model_id}`[/cyan] for actual benchmark numbers.[/dim]")

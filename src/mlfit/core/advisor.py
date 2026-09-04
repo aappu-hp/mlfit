@@ -54,24 +54,22 @@ class Advisor:
     def recommend(
         self,
         backend: str = "auto",
-        include_quant: bool = True,
     ) -> RecommendResult:
         """
         Recommend optimal serving configurations.
 
         Args:
             backend: "auto" | "vllm" | "ollama" | "llamacpp" | "tgi"
-            include_quant: If True and model doesn't fit, search for quantized alternatives
 
         Returns:
-            RecommendResult with ranked configs and alternatives
+            RecommendResult with ranked configs and quantized alternatives when model doesn't fit.
         """
         from mlfit.strategies import STRATEGY_REGISTRY, _load_all_strategies
         from mlfit.core.memory import check_fits
 
         _load_all_strategies()
 
-        hw = self.hardware
+        hardware = self.hardware
         model = self.model
 
         compatible = []
@@ -79,9 +77,9 @@ class Advisor:
             if backend != "auto" and name != backend:
                 continue
             strategy = StrategyClass()
-            if strategy.is_compatible(model, hw):
-                config = strategy.generate_config(model, hw)
-                score = strategy.estimate_feasibility(model, hw)
+            if strategy.is_compatible(model, hardware):
+                config = strategy.generate_config(model, hardware)
+                score = strategy.estimate_feasibility(model, hardware)
                 compatible.append((score, config, strategy))
                 logger.debug("Strategy %s: score=%.2f", name, score.score)
 
@@ -90,13 +88,13 @@ class Advisor:
             "Scored %d compatible strategies for %s", len(compatible), model.model_id
         )
 
-        fits, estimated_vram, headroom = check_fits(model, hw)
+        fits, estimated_vram, headroom = check_fits(model, hardware)
 
         quant_alternatives = []
-        if not fits and include_quant:
+        if not fits:
             from mlfit.quantization.advisor import find_quantized_alternatives
             quant_alternatives = find_quantized_alternatives(
-                self.model_id, hw
+                self.model_id, hardware
             )
             logger.info(
                 "Model does not fit (needs %.1f GB); found %d quantized alternatives",
@@ -105,10 +103,10 @@ class Advisor:
             )
 
         return RecommendResult(
-            hardware=hw,
+            hardware=hardware,
             model=model,
             configs=compatible,
-            fits=fits,
+            is_feasible=fits,
             estimated_vram_gb=estimated_vram,
             headroom_gb=headroom,
             quantized_alternatives=quant_alternatives,
@@ -145,11 +143,11 @@ class Advisor:
 
         _load_all_strategies()
 
-        hw = self.hardware
+        hardware = self.hardware
         model = self.model
         concurrency_levels = concurrency or [1, 4, 16]
 
-        strategy = self._select_strategy(backend, model, hw)
+        strategy = self._select_strategy(backend, model, hardware)
         logger.info(
             "Profile starting: model=%s backend=%s concurrency=%s",
             model.model_id, strategy.__class__.__name__, concurrency_levels,
@@ -157,14 +155,84 @@ class Advisor:
 
         session = ProfileSession(
             model=model,
-            hardware=hw,
+            hardware=hardware,
             strategy=strategy,
             concurrency_levels=concurrency_levels,
             progress_callback=progress_callback,
         )
         return session.run()
 
-    def _select_strategy(self, backend: str, model, hw):
+    async def profile_async(
+        self,
+        backend: str = "auto",
+        concurrency: list = None,
+        progress_callback=None,
+    ):
+        """
+        Non-blocking version of profile() for use in async contexts.
+
+        Runs the blocking profile() call in a thread pool via asyncio.to_thread,
+        leaving the event loop free for other work during the (potentially long)
+        profiling session.
+
+        Args:
+            backend: "auto" | "vllm" | "ollama" | "llamacpp" | "tgi"
+            concurrency: List of concurrency levels, e.g. [1, 4, 16].
+            progress_callback: Optional callable(phase, message, is_success).
+
+        Returns:
+            ProfilingResult — same as profile().
+        """
+        import asyncio
+        return await asyncio.to_thread(self.profile, backend, concurrency, progress_callback)
+
+    async def stream_profile(self, backend: str = "auto", concurrency: list = None):
+        """
+        Async generator that yields live progress updates during profiling.
+
+        Bridges the synchronous progress_callback to an async for loop via an
+        asyncio.Queue. Yields dicts with keys phase/message/is_success for each
+        progress event, then a final dict with phase="complete" and result=ProfilingResult.
+
+        Args:
+            backend: "auto" | "vllm" | "ollama" | "llamacpp" | "tgi"
+            concurrency: List of concurrency levels, e.g. [1, 4, 16].
+
+        Yields:
+            {"phase": str, "message": str, "is_success": bool} for each step.
+            {"phase": "complete", "result": ProfilingResult} as the final item.
+        """
+        import asyncio
+
+        loop = asyncio.get_event_loop()
+        queue: asyncio.Queue = asyncio.Queue()
+        sentinel = object()
+
+        def on_progress(phase: str, message: str, is_success: bool) -> None:
+            # call_soon_threadsafe is required because on_progress is called from
+            # the worker thread created by asyncio.to_thread, and asyncio.Queue
+            # is not thread-safe — Future.set_result() must run on the event loop thread.
+            loop.call_soon_threadsafe(
+                queue.put_nowait,
+                {"phase": phase, "message": message, "is_success": is_success},
+            )
+
+        async def _run():
+            result = await asyncio.to_thread(self.profile, backend, concurrency, on_progress)
+            queue.put_nowait(sentinel)
+            return result
+
+        task = asyncio.create_task(_run())
+        while True:
+            item = await queue.get()
+            if item is sentinel:
+                break
+            yield item
+
+        result = await task
+        yield {"phase": "complete", "result": result}
+
+    def _select_strategy(self, backend: str, model, hardware):
         from mlfit.strategies import STRATEGY_REGISTRY
 
         if backend != "auto":
@@ -177,9 +245,9 @@ class Advisor:
             return cls()
 
         compatible = [
-            (cls().estimate_feasibility(model, hw).score, cls())
+            (cls().estimate_feasibility(model, hardware).score, cls())
             for cls in STRATEGY_REGISTRY.values()
-            if cls().is_compatible(model, hw)
+            if cls().is_compatible(model, hardware)
         ]
         if not compatible:
             raise RuntimeError(

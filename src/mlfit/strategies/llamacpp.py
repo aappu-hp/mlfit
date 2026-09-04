@@ -10,35 +10,47 @@ class LlamaCppStrategy(BaseStrategy):
               edge deployments, maximum control over parameters.
     """
 
-    def is_compatible(self, model, hw) -> bool:
+    def is_compatible(self, model, hardware) -> bool:
+        """Return True for LLM and GGUF model types on any hardware.
+
+        llama.cpp runs on CUDA, MPS, and CPU — hardware type is never a blocker.
+        Only the model format matters: "llm" (converted at runtime) or "gguf".
+
+        Args:
+            model: ModelProfile — compatible when model_type is "llm" or "gguf".
+            hardware: HardwareProfile — accepted for any hardware configuration.
+
+        Returns:
+            True when the model type is llm or gguf; False otherwise.
+        """
         return model.model_type in ("llm", "gguf")
 
-    def estimate_feasibility(self, model, hw) -> FeasibilityScore:
+    def estimate_feasibility(self, model, hardware) -> FeasibilityScore:
         from mlfit.core.memory import estimate_weights_gb
 
         weights_gb = estimate_weights_gb(model.num_parameters,
-                                          model.quant_type or model.dtype)
+                                          model.effective_dtype)
 
-        if hw.gpu_backend == "mps":
-            if weights_gb <= hw.total_vram_gb * 0.80:
+        if hardware.gpu_backend == "mps":
+            if weights_gb <= hardware.total_vram_gb * 0.80:
                 return FeasibilityScore(0.82, "Good — Metal acceleration available",
                                         ["Ollama is simpler for same performance"])
             return FeasibilityScore(0.50, "Fits with unified memory, may need quant", [])
 
-        if hw.gpu_backend in ("cuda", "rocm"):
-            if weights_gb <= hw.total_vram_gb * 0.85:
+        if hardware.gpu_backend in ("cuda", "rocm"):
+            if weights_gb <= hardware.total_vram_gb * 0.85:
                 return FeasibilityScore(0.52, "Works but vLLM is faster on CUDA",
                                         ["Consider vLLM for higher throughput"])
             return FeasibilityScore(0.35, "Will CPU offload layers that don't fit", [])
 
-        ram_available = hw.ram_gb * 0.65
+        ram_available = hardware.ram_gb * 0.65
         if weights_gb <= ram_available:
-            score = 0.80 if hw.has_avx512 else 0.70 if hw.has_avx2 else 0.55
-            avx_note = "AVX512" if hw.has_avx512 else "AVX2" if hw.has_avx2 else "no AVX"
+            score = 0.80 if hardware.has_avx512 else 0.70 if hardware.has_avx2 else 0.55
+            avx_note = "AVX512" if hardware.has_avx512 else "AVX2" if hardware.has_avx2 else "no AVX"
             return FeasibilityScore(score, f"Best CPU inference engine ({avx_note})", [])
         return FeasibilityScore(0.10, "Model too large for available RAM", [])
 
-    def generate_config(self, model, hw) -> BackendConfig:
+    def generate_config(self, model, hardware) -> BackendConfig:
         """
         Produce the optimal llama-server configuration for the hardware.
 
@@ -49,14 +61,14 @@ class LlamaCppStrategy(BaseStrategy):
 
         Args:
             model: ModelProfile with model_type == "llm" or "gguf".
-            hw: HardwareProfile describing available compute.
+            hardware: HardwareProfile describing available compute.
 
         Returns:
             BackendConfig with a ready-to-run llama-server command.
         """
         params = {}
 
-        if hw.gpu_backend != "none":
+        if hardware.gpu_backend != "none":
             params["n_gpu_layers"] = 999
             params["ctx_size"] = min(model.max_context_length, 8192)
         else:
@@ -64,26 +76,26 @@ class LlamaCppStrategy(BaseStrategy):
             params["ctx_size"] = min(model.max_context_length, 4096)
             params["mlock"] = True
 
-        params["threads"] = hw.cpu_cores
+        params["threads"] = hardware.cpu_cores
         params["batch_size"] = 512
 
-        if hw.gpu_backend == "mps":
-            params["threads_batch"] = hw.cpu_cores
+        if hardware.gpu_backend == "mps":
+            params["threads_batch"] = hardware.cpu_cores
 
         model_filename = self._get_model_filename(model)
         command = self._build_command(model_filename, params)
 
         from mlfit.core.memory import estimate_weights_gb
         weights_gb = estimate_weights_gb(model.num_parameters,
-                                          model.quant_type or model.dtype)
+                                          model.effective_dtype)
 
         return BackendConfig(
             backend="llamacpp",
             model_id=model.model_id,
             params=params,
             command=command,
-            estimated_vram_gb=0.0 if hw.gpu_backend == "none" else weights_gb,
-            estimated_tps=self._estimate_tps(model, hw),
+            estimated_vram_gb=0.0 if hardware.gpu_backend == "none" else weights_gb,
+            estimated_tps=self._estimate_tps(model, hardware),
             server_url="http://localhost:8080",
             health_path="/health",
         )
@@ -147,25 +159,23 @@ class LlamaCppStrategy(BaseStrategy):
         args.append("--host 0.0.0.0 --port 8080")
         return " \\\n    ".join(args)
 
-    def _estimate_tps(self, model, hw) -> float:
-        params_b = model.num_parameters / 1e9
-        gpu_name = hw.gpus[0].name.lower() if hw.gpus else ""
+    def _estimate_tps(self, model, hardware) -> float:
+        gpu_name = self._gpu_name(hardware)
 
-        if hw.gpu_backend == "mps":
+        if hardware.gpu_backend == "mps":
             base = 55
-        elif hw.gpu_backend in ("cuda", "rocm"):
+        elif hardware.gpu_backend in ("cuda", "rocm"):
             if "4090" in gpu_name:
                 base = 40
             elif "3090" in gpu_name:
                 base = 28
             else:
                 base = 18
-        elif hw.has_avx512:
+        elif hardware.has_avx512:
             base = 12
-        elif hw.has_avx2:
+        elif hardware.has_avx2:
             base = 6
         else:
             base = 2
 
-        scale = min(7.0 / max(params_b, 0.5), 1.0)
-        return round(base * scale, 1)
+        return round(base * self._param_scale(model), 1)

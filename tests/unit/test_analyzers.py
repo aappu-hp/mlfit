@@ -207,9 +207,14 @@ class TestHFAnalyzerWithMock(unittest.TestCase):
     def test_model_not_found_raises(self):
         """ModelNotFoundError should be raised when HF returns a 404-like error."""
         from mlfit.exceptions import ModelNotFoundError
+        from huggingface_hub.utils import RepositoryNotFoundError
+        from unittest.mock import MagicMock
+
+        mock_response = MagicMock()
+        mock_response.headers = {}
 
         def fake_download(*args, **kwargs):
-            raise Exception("Repository Not Found")
+            raise RepositoryNotFoundError("nonexistent/model-xyz", response=mock_response)
 
         from mlfit.analyzers.hf_analyzer import analyze_hf_model
         with patch("mlfit.analyzers.hf_analyzer._hf_hub_download", side_effect=fake_download):

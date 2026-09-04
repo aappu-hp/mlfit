@@ -12,11 +12,11 @@ class ONNXRuntimeStrategy(BaseStrategy):
     Requires: onnxruntime (CPU) or onnxruntime-gpu (CUDA) package.
     """
 
-    def is_compatible(self, model, hw) -> bool:
+    def is_compatible(self, model, hardware) -> bool:
         """Return True only for ONNX model files."""
         return model.model_type == "onnx"
 
-    def estimate_feasibility(self, model, hw) -> FeasibilityScore:
+    def estimate_feasibility(self, model, hardware) -> FeasibilityScore:
         """
         Score ONNX Runtime suitability for the given hardware.
 
@@ -27,30 +27,30 @@ class ONNXRuntimeStrategy(BaseStrategy):
 
         Args:
             model: ModelProfile with model_type == "onnx".
-            hw: HardwareProfile describing available compute.
+            hardware: HardwareProfile describing available compute.
 
         Returns:
             FeasibilityScore in range 0.45–0.88.
         """
-        if hw.gpu_backend == "cuda":
+        if hardware.gpu_backend == "cuda":
             return FeasibilityScore(
                 0.88,
                 "Excellent — CUDA execution provider available",
                 [],
             )
-        if hw.gpu_backend == "mps":
+        if hardware.gpu_backend == "mps":
             return FeasibilityScore(
                 0.80,
                 "Good — CoreML execution provider via MPS",
                 [],
             )
-        if hw.has_avx512:
+        if hardware.has_avx512:
             return FeasibilityScore(
                 0.72,
                 "Good — CPU inference with AVX512 kernels",
                 [],
             )
-        if hw.has_avx2:
+        if hardware.has_avx2:
             return FeasibilityScore(
                 0.65,
                 "Moderate — CPU inference with AVX2 kernels",
@@ -62,7 +62,7 @@ class ONNXRuntimeStrategy(BaseStrategy):
             ["Performance will be limited without AVX2/AVX512"],
         )
 
-    def generate_config(self, model, hw) -> BackendConfig:
+    def generate_config(self, model, hardware) -> BackendConfig:
         """
         Produce an ONNX Runtime InferenceSession configuration.
 
@@ -73,14 +73,14 @@ class ONNXRuntimeStrategy(BaseStrategy):
 
         Args:
             model: ModelProfile with model_type == "onnx".
-            hw: HardwareProfile describing available compute.
+            hardware: HardwareProfile describing available compute.
 
         Returns:
             BackendConfig with a Python snippet as the command field.
         """
-        providers = self._select_providers(hw)
-        intra_threads = hw.cpu_cores
-        inter_threads = min(hw.cpu_cores // 4, 4) if hw.cpu_cores >= 8 else 1
+        providers = self._select_providers(hardware)
+        intra_threads = hardware.cpu_cores
+        inter_threads = min(hardware.cpu_cores // 4, 4) if hardware.cpu_cores >= 8 else 1
 
         params = {
             "providers": providers,
@@ -90,7 +90,7 @@ class ONNXRuntimeStrategy(BaseStrategy):
 
         command = self._build_code_snippet(model.model_id, providers, intra_threads, inter_threads)
 
-        vram_gb = model.estimated_size_gb if hw.gpu_backend in ("cuda", "mps") else 0.0
+        vram_gb = model.estimated_size_gb if hardware.gpu_backend in ("cuda", "mps") else 0.0
 
         return BackendConfig(
             backend="onnxruntime",
@@ -98,7 +98,7 @@ class ONNXRuntimeStrategy(BaseStrategy):
             params=params,
             command=command,
             estimated_vram_gb=vram_gb,
-            estimated_tps=self._estimate_throughput(model, hw),
+            estimated_tps=self._estimate_throughput(model, hardware),
         )
 
     def format_key_settings(self, params: dict) -> str:
@@ -119,7 +119,7 @@ class ONNXRuntimeStrategy(BaseStrategy):
             parts.append(f"threads={params['intra_op_num_threads']}")
         return ", ".join(parts) or "defaults"
 
-    def _select_providers(self, hw) -> list:
+    def _select_providers(self, hardware) -> list:
         """
         Return the ordered execution provider list for the hardware.
 
@@ -127,14 +127,14 @@ class ONNXRuntimeStrategy(BaseStrategy):
         available one, so the list order encodes priority.
 
         Args:
-            hw: HardwareProfile.
+            hardware: HardwareProfile.
 
         Returns:
             List of provider name strings.
         """
-        if hw.gpu_backend == "cuda":
+        if hardware.gpu_backend == "cuda":
             return ["CUDAExecutionProvider", "CPUExecutionProvider"]
-        if hw.gpu_backend == "mps":
+        if hardware.gpu_backend == "mps":
             return ["CoreMLExecutionProvider", "CPUExecutionProvider"]
         return ["CPUExecutionProvider"]
 
@@ -167,23 +167,23 @@ class ONNXRuntimeStrategy(BaseStrategy):
             f"outputs = session.run(None, {{\"input\": input_data}})"
         )
 
-    def _estimate_throughput(self, model, hw) -> float:
+    def _estimate_throughput(self, model, hardware) -> float:
         """
         Estimate inferences per second based on hardware capability.
 
         Args:
             model: ModelProfile with estimated_size_gb populated.
-            hw: HardwareProfile.
+            hardware: HardwareProfile.
 
         Returns:
             Estimated throughput as a float (inferences/second).
         """
-        if hw.gpu_backend == "cuda":
+        if hardware.gpu_backend == "cuda":
             return 25000.0
-        if hw.gpu_backend == "mps":
+        if hardware.gpu_backend == "mps":
             return 15000.0
-        if hw.has_avx512:
+        if hardware.has_avx512:
             return 18000.0
-        if hw.has_avx2:
+        if hardware.has_avx2:
             return 10000.0
         return 4000.0

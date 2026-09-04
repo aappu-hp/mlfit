@@ -53,11 +53,11 @@ def run(
     backend_list = [b.strip() for b in backends.split(",")]
 
     advisor = Advisor(model_id=model_id, gpuid=gpuid)
-    hw = advisor.hardware
+    hardware = advisor.hardware
     model = advisor.model
 
     render_header()
-    render_hardware_panel(hw)
+    render_hardware_panel(hardware)
 
     console.print(f"\n  Comparing [bold]{len(backend_list)}[/bold] backends for [cyan]{model_id}[/cyan]...\n")
 

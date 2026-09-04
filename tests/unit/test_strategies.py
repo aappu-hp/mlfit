@@ -1,4 +1,3 @@
-"""Unit tests for backend strategies — no GPU or network required."""
 import unittest
 from mlfit.core.models import ModelProfile, HardwareProfile, GPUInfo
 from mlfit.core.memory import estimate_weights_gb

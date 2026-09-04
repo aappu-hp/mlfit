@@ -69,16 +69,14 @@ def analyze_hf_model(model_id: str) -> ModelProfile:
 
 def _download_config(model_id: str) -> dict:
     """Download config.json from HuggingFace Hub. No weights downloaded."""
+    from huggingface_hub.utils import RepositoryNotFoundError, EntryNotFoundError
 
     try:
         config_path = _hf_hub_download(repo_id=model_id, filename="config.json")
         with open(config_path) as f:
             return json.load(f)
-    except Exception as e:
-        err_str = str(e).lower()
-        if "not found" in err_str or "404" in err_str or "repository" in err_str:
-            raise ModelNotFoundError(model_id)
-        raise
+    except (RepositoryNotFoundError, EntryNotFoundError):
+        raise ModelNotFoundError(model_id)
 
 
 def _estimate_params_from_config(config: dict) -> float:

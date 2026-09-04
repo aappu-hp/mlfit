@@ -10,15 +10,15 @@ class TGIStrategy(BaseStrategy):
     Requires: Docker + NVIDIA CUDA GPU.
     """
 
-    def is_compatible(self, model, hw) -> bool:
-        if hw.gpu_backend != "cuda":
+    def is_compatible(self, model, hardware) -> bool:
+        if hardware.gpu_backend != "cuda":
             return False
         return model.model_type == "llm"
 
-    def estimate_feasibility(self, model, hw) -> FeasibilityScore:
+    def estimate_feasibility(self, model, hardware) -> FeasibilityScore:
         from mlfit.core.memory import estimate_vram_gb
         needed = estimate_vram_gb(model, max_seq_len=4096, max_batch=8)
-        ratio = needed / max(hw.total_vram_gb, 1.0)
+        ratio = needed / max(hardware.total_vram_gb, 1.0)
 
         if ratio > 1.1:
             return FeasibilityScore(0.0, "Model too large for available VRAM", [])
@@ -29,7 +29,7 @@ class TGIStrategy(BaseStrategy):
             return FeasibilityScore(0.72, "Good fit with standard settings", [])
         return FeasibilityScore(0.78, "Excellent fit, HF-native serving", [])
 
-    def generate_config(self, model, hw) -> BackendConfig:
+    def generate_config(self, model, hardware) -> BackendConfig:
         """
         Produce the optimal TGI Docker command for the model/hardware pair.
 
@@ -39,7 +39,7 @@ class TGIStrategy(BaseStrategy):
 
         Args:
             model: ModelProfile with model_type == "llm".
-            hw: HardwareProfile with gpu_backend == "cuda".
+            hardware: HardwareProfile with gpu_backend == "cuda".
 
         Returns:
             BackendConfig with a Docker run command.
@@ -47,17 +47,17 @@ class TGIStrategy(BaseStrategy):
         from mlfit.detectors import get_tensor_parallel_size
         from mlfit.core.memory import estimate_vram_gb
 
-        tp_size = get_tensor_parallel_size(hw.gpus, model.num_attention_heads)
+        tp_size = get_tensor_parallel_size(hardware.gpus, model.num_attention_heads)
 
         max_input = min(model.max_context_length // 2, 4096)
         max_total = min(model.max_context_length, 8192)
 
         vram_est = estimate_vram_gb(model, max_seq_len=max_total, max_batch=8)
-        ratio = vram_est / max(hw.total_vram_gb, 1.0)
+        ratio = vram_est / max(hardware.total_vram_gb, 1.0)
 
         from mlfit.core.memory import estimate_weights_gb
         weights_gb = estimate_weights_gb(model.num_parameters, model.dtype)
-        weights_ratio = weights_gb / max(hw.total_vram_gb, 1.0)
+        weights_ratio = weights_gb / max(hardware.total_vram_gb, 1.0)
 
         quantize_flag = self._resolve_quantize_flag(model, weights_ratio)
 
@@ -69,7 +69,7 @@ class TGIStrategy(BaseStrategy):
         if quantize_flag:
             params["quantize"] = quantize_flag
 
-        gpus = ",".join(str(g.index) for g in hw.gpus)
+        gpus = ",".join(str(g.index) for g in hardware.gpus)
         cmd_parts = [
             f"docker run --gpus '\"device={gpus}\"'",
             f"    -v $HF_HOME:/data",
@@ -91,7 +91,7 @@ class TGIStrategy(BaseStrategy):
             params=params,
             command=cmd,
             estimated_vram_gb=vram_est,
-            estimated_tps=self._estimate_tps(model, hw),
+            estimated_tps=self._estimate_tps(model, hardware),
             server_url="http://localhost:8080",
             health_path="/health",
         )
@@ -129,10 +129,9 @@ class TGIStrategy(BaseStrategy):
             parts.append(f"max-tokens={params['max_total_tokens']}")
         return ", ".join(parts) or "defaults"
 
-    def _estimate_tps(self, model, hw) -> float:
+    def _estimate_tps(self, model, hardware) -> float:
         """TGI is roughly ~15% slower than vLLM for single requests."""
-        gpu_name = hw.gpus[0].name.lower() if hw.gpus else ""
-        params_b = model.num_parameters / 1e9
+        gpu_name = self._gpu_name(hardware)
 
         if "h100" in gpu_name:
             base = 170
@@ -145,5 +144,4 @@ class TGIStrategy(BaseStrategy):
         else:
             base = 25
 
-        scale = min(7.0 / max(params_b, 0.5), 1.0)
-        return round(base * scale, 1)
+        return round(base * self._param_scale(model), 1)

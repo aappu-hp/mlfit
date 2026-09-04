@@ -13,11 +13,11 @@ class SklearnStrategy(BaseStrategy):
     No GPU required — sklearn models trivially fit on any machine.
     """
 
-    def is_compatible(self, model, hw) -> bool:
+    def is_compatible(self, model, hardware) -> bool:
         """Return True only for sklearn-type model descriptors."""
         return model.model_type == "sklearn"
 
-    def estimate_feasibility(self, model, hw) -> FeasibilityScore:
+    def estimate_feasibility(self, model, hardware) -> FeasibilityScore:
         """
         Score sklearn suitability for the model.
 
@@ -28,7 +28,7 @@ class SklearnStrategy(BaseStrategy):
 
         Args:
             model: ModelProfile with model_type == "sklearn".
-            hw: HardwareProfile (GPU presence is irrelevant here).
+            hardware: HardwareProfile (GPU presence is irrelevant here).
 
         Returns:
             FeasibilityScore in range 0.80–0.95.
@@ -48,7 +48,7 @@ class SklearnStrategy(BaseStrategy):
             [],
         )
 
-    def generate_config(self, model, hw) -> BackendConfig:
+    def generate_config(self, model, hardware) -> BackendConfig:
         """
         Produce a sklearn joblib serving configuration.
 
@@ -58,12 +58,12 @@ class SklearnStrategy(BaseStrategy):
 
         Args:
             model: ModelProfile with model_type == "sklearn".
-            hw: HardwareProfile (cpu_threads used for n_jobs).
+            hardware: HardwareProfile (cpu_threads used for n_jobs).
 
         Returns:
             BackendConfig with a Python snippet as the command field.
         """
-        n_jobs = hw.cpu_threads
+        n_jobs = hardware.cpu_threads
         class_name = model.architecture
 
         params = {
@@ -79,7 +79,7 @@ class SklearnStrategy(BaseStrategy):
             params=params,
             command=command,
             estimated_vram_gb=0.0,
-            estimated_tps=self._estimate_throughput(model, hw),
+            estimated_tps=self._estimate_throughput(model, hardware),
         )
 
     def format_key_settings(self, params: dict) -> str:
@@ -121,7 +121,7 @@ class SklearnStrategy(BaseStrategy):
             f"predictions = model.predict(X)"
         )
 
-    def _estimate_throughput(self, model, hw) -> float:
+    def _estimate_throughput(self, model, hardware) -> float:
         """
         Estimate inferences per second based on model family and CPU threads.
 
@@ -130,13 +130,13 @@ class SklearnStrategy(BaseStrategy):
 
         Args:
             model: ModelProfile with architecture set to the sklearn class name.
-            hw: HardwareProfile (cpu_threads used for parallelism estimate).
+            hardware: HardwareProfile (cpu_threads used for parallelism estimate).
 
         Returns:
             Estimated throughput as a float (inferences/second, batch of 1000).
         """
         architecture = model.architecture.lower()
-        thread_scale = min(hw.cpu_threads / 8.0, 4.0)
+        thread_scale = min(hardware.cpu_threads / 8.0, 4.0)
 
         if any(x in architecture for x in ("forest", "tree", "gradient", "boost", "xgb", "lgbm")):
             base = 3000.0

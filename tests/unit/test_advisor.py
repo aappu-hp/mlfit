@@ -106,7 +106,7 @@ def _recommend(model: ModelProfile, hw: HardwareProfile, backend: str = "auto") 
 
     with patch.object(type(advisor), "hardware", new_callable=lambda: property(lambda self: hw)):
         with patch.object(type(advisor), "model", new_callable=lambda: property(lambda self: model)):
-            return advisor.recommend(backend=backend, include_quant=False)
+            return advisor.recommend(backend=backend, )
 
 
 # ── Tests: strategy selection ─────────────────────────────────────────────────
@@ -162,11 +162,11 @@ class TestAdvisorFitsLogic(unittest.TestCase):
 
     def test_small_model_fits_on_4090(self):
         result = _recommend(_qwen_05b(), _rtx4090())
-        self.assertTrue(result.fits)
+        self.assertTrue(result.is_feasible)
 
     def test_8b_fits_on_24gb(self):
         result = _recommend(_llama_8b(), _rtx4090())
-        self.assertTrue(result.fits)
+        self.assertTrue(result.is_feasible)
 
     def test_model_does_not_fit_on_tiny_vram(self):
         """A 16GB model shouldn't fit on a 10GB GPU."""
@@ -177,7 +177,7 @@ class TestAdvisorFitsLogic(unittest.TestCase):
             has_avx=True, has_avx2=True, has_avx512=False, disk_free_gb=200.0,
         )
         result = _recommend(_llama_8b(), tiny_hw)
-        self.assertFalse(result.fits)
+        self.assertFalse(result.is_feasible)
 
     def test_result_has_best_property(self):
         result = _recommend(_llama_8b(), _rtx4090())
@@ -205,7 +205,7 @@ class TestAdvisorOutputContracts(unittest.TestCase):
         result = _recommend(_llama_8b(), _rtx4090())
         d = result.to_dict()
         required = {"mlfit_version", "timestamp", "hardware", "model",
-                    "fits", "configs", "quantized_alternatives"}
+                    "is_feasible", "configs", "quantized_alternatives"}
         self.assertEqual(required, required & d.keys())
 
     def test_config_dicts_have_required_keys(self):

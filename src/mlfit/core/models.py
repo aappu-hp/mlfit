@@ -50,6 +50,11 @@ class ModelProfile:
     quant_type: Optional[str] = None       # "Q4_K_M" | "AWQ" | "GPTQ" | None
     estimated_size_gb: float = 0.0         # filled by analyzer
 
+    @property
+    def effective_dtype(self) -> str:
+        """Return the active dtype: quant_type when set, otherwise dtype."""
+        return self.quant_type or self.dtype
+
 
 @dataclass
 class AlternativeModel:
@@ -73,7 +78,7 @@ class RecommendResult:
     hardware: HardwareProfile
     model: ModelProfile
     configs: list                          # list of (FeasibilityScore, BackendConfig, Strategy)
-    fits: bool
+    is_feasible: bool
     quantized_alternatives: list           # list[AlternativeModel]
     estimated_vram_gb: float = 0.0         # total VRAM needed (weights + KV cache + overhead)
     headroom_gb: float = 0.0               # available VRAM minus estimated VRAM
@@ -101,7 +106,7 @@ class RecommendResult:
         import datetime
         from mlfit._version import __version__
 
-        hw = self.hardware
+        hardware = self.hardware
         model = self.model
 
         return {
@@ -117,17 +122,17 @@ class RecommendResult:
                         "compute_capability": list(g.compute_capability),
                         "is_unified_memory": g.is_unified_memory,
                     }
-                    for g in hw.gpus
+                    for g in hardware.gpus
                 ],
-                "total_vram_gb": round(hw.total_vram_gb, 2),
-                "gpu_backend": hw.gpu_backend,
-                "cpu_cores": hw.cpu_cores,
-                "cpu_threads": hw.cpu_threads,
-                "ram_gb": round(hw.ram_gb, 1),
-                "has_avx": hw.has_avx,
-                "has_avx2": hw.has_avx2,
-                "has_avx512": hw.has_avx512,
-                "disk_free_gb": round(hw.disk_free_gb, 1),
+                "total_vram_gb": round(hardware.total_vram_gb, 2),
+                "gpu_backend": hardware.gpu_backend,
+                "cpu_cores": hardware.cpu_cores,
+                "cpu_threads": hardware.cpu_threads,
+                "ram_gb": round(hardware.ram_gb, 1),
+                "has_avx": hardware.has_avx,
+                "has_avx2": hardware.has_avx2,
+                "has_avx512": hardware.has_avx512,
+                "disk_free_gb": round(hardware.disk_free_gb, 1),
             },
             "model": {
                 "model_id": model.model_id,
@@ -139,7 +144,7 @@ class RecommendResult:
                 "estimated_size_gb": round(model.estimated_size_gb, 2),
                 "quant_type": model.quant_type,
             },
-            "fits": self.fits,
+            "is_feasible": self.is_feasible,
             "configs": [
                 {
                     "rank": i + 1,
@@ -212,7 +217,7 @@ class ProfilingResult:
         """
         from mlfit._version import __version__
 
-        hw = self.hardware
+        hardware = self.hardware
         cfg = self.final_config
 
         return {
@@ -228,10 +233,10 @@ class ProfilingResult:
                         "vram_total_gb": round(g.vram_total_gb, 2),
                         "vram_free_gb": round(g.vram_free_gb, 2),
                     }
-                    for g in hw.gpus
+                    for g in hardware.gpus
                 ],
-                "gpu_backend": hw.gpu_backend,
-                "ram_gb": round(hw.ram_gb, 1),
+                "gpu_backend": hardware.gpu_backend,
+                "ram_gb": round(hardware.ram_gb, 1),
             },
             "final_config": {
                 "params": cfg.params,
@@ -251,6 +256,23 @@ class ProfilingResult:
             ],
             "time_elapsed_s": round(self.time_elapsed_s, 1),
         }
+
+    def tps_at_concurrency(self, n: int) -> float:
+        """Return the measured TPS at a specific concurrency level.
+
+        Args:
+            n: Concurrency level that was benchmarked (e.g. 1, 4, 16).
+
+        Raises:
+            ValueError: If that concurrency level was not included in the run.
+        """
+        for bp in self.benchmark_points:
+            if bp.concurrency == n:
+                return bp.tps
+        available = [bp.concurrency for bp in self.benchmark_points]
+        raise ValueError(
+            f"Concurrency {n} was not benchmarked. Available levels: {available}"
+        )
 
     def to_json(self) -> str:
         """

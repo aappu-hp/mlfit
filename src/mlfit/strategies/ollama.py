@@ -25,46 +25,58 @@ class OllamaStrategy(BaseStrategy):
     Drawback: no batched inference (1 request at a time).
     """
 
-    def is_compatible(self, model, hw) -> bool:
+    def is_compatible(self, model, hardware) -> bool:
+        """Return True for LLM and GGUF model types on any hardware.
+
+        Ollama handles CPU, MPS, and CUDA through its own backend selection;
+        it never requires a specific GPU to be present.
+
+        Args:
+            model: ModelProfile — compatible when model_type is "llm" or "gguf".
+            hardware: HardwareProfile — accepted for any hardware configuration.
+
+        Returns:
+            True when the model type is llm or gguf; False otherwise.
+        """
         if model.model_type not in ("llm", "gguf"):
             return False
         return True
 
-    def estimate_feasibility(self, model, hw) -> FeasibilityScore:
+    def estimate_feasibility(self, model, hardware) -> FeasibilityScore:
         from mlfit.core.memory import estimate_weights_gb
 
         weights_gb = estimate_weights_gb(model.num_parameters,
-                                          model.quant_type or model.dtype)
+                                          model.effective_dtype)
 
-        if hw.gpu_backend == "mps":
-            if weights_gb <= hw.total_vram_gb * 0.85:
+        if hardware.gpu_backend == "mps":
+            if weights_gb <= hardware.total_vram_gb * 0.85:
                 return FeasibilityScore(0.95, "Excellent — native Metal acceleration", [])
             return FeasibilityScore(0.60, "Fits with unified memory", ["Large model"])
 
-        if hw.gpu_backend == "cuda":
-            if weights_gb <= hw.total_vram_gb * 0.85:
+        if hardware.gpu_backend == "cuda":
+            if weights_gb <= hardware.total_vram_gb * 0.85:
                 return FeasibilityScore(0.65, "Good for local use, no batching",
                                         ["Sequential requests only"])
             return FeasibilityScore(0.40, "Model may not fully fit on GPU",
                                     ["Will use CPU offload"])
 
-        ram_available = hw.ram_gb * 0.6
+        ram_available = hardware.ram_gb * 0.6
         if weights_gb <= ram_available:
             return FeasibilityScore(0.55, "Works on CPU, will be slow",
                                     ["CPU inference only"])
         return FeasibilityScore(0.15, "Model too large for CPU RAM", [])
 
-    def generate_config(self, model, hw) -> BackendConfig:
+    def generate_config(self, model, hardware) -> BackendConfig:
         from mlfit.core.memory import estimate_weights_gb
 
         ctx = min(model.max_context_length, 4096)
 
         params = {
             "num_ctx": ctx,
-            "num_thread": hw.cpu_cores,
+            "num_thread": hardware.cpu_cores,
         }
 
-        if hw.gpu_backend in ("cuda", "rocm", "mps"):
+        if hardware.gpu_backend in ("cuda", "rocm", "mps"):
             params["num_gpu"] = 999
 
         ollama_name = self._get_ollama_name(model.model_id)
@@ -74,7 +86,7 @@ class OllamaStrategy(BaseStrategy):
             command += f" --num-ctx {ctx}"
 
         weights_gb = estimate_weights_gb(model.num_parameters,
-                                          model.quant_type or model.dtype)
+                                          model.effective_dtype)
 
         return BackendConfig(
             backend="ollama",
@@ -82,7 +94,7 @@ class OllamaStrategy(BaseStrategy):
             params=params,
             command=command,
             estimated_vram_gb=weights_gb * 1.1,
-            estimated_tps=self._estimate_tps(model, hw),
+            estimated_tps=self._estimate_tps(model, hardware),
             server_url="http://localhost:11434",
             server_command="ollama serve",
             health_path="/api/tags",
@@ -103,26 +115,24 @@ class OllamaStrategy(BaseStrategy):
             return OLLAMA_MODEL_MAP[model_id]
         return model_id.split("/")[-1].lower().replace("-", ":").replace("instruct", "instruct")
 
-    def _estimate_tps(self, model, hw) -> float:
+    def _estimate_tps(self, model, hardware) -> float:
         """Ollama TPS estimates (no batching, single request)."""
-        params_b = model.num_parameters / 1e9
-        gpu_name = hw.gpus[0].name.lower() if hw.gpus else ""
+        gpu_name = self._gpu_name(hardware)
 
-        if hw.gpu_backend == "mps":
+        if hardware.gpu_backend == "mps":
             base = 60
-        elif hw.gpu_backend == "cuda":
+        elif hardware.gpu_backend == "cuda":
             if "4090" in gpu_name:
                 base = 50
             elif "3090" in gpu_name:
                 base = 35
             else:
                 base = 25
-        elif hw.has_avx512:
+        elif hardware.has_avx512:
             base = 12
-        elif hw.has_avx2:
+        elif hardware.has_avx2:
             base = 6
         else:
             base = 2
 
-        scale = min(7.0 / max(params_b, 0.5), 1.0)
-        return round(base * scale, 1)
+        return round(base * self._param_scale(model), 1)

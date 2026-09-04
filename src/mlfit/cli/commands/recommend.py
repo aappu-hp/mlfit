@@ -64,7 +64,7 @@ def run(
             _ = advisor.model
             progress.update(model_task, description="[green]Fetching model config... ✓[/green]")
 
-            result = advisor.recommend(backend=_backend, include_quant=quant)
+            result = advisor.recommend(backend=_backend)
 
         except Exception as e:
             progress.stop()
@@ -75,7 +75,7 @@ def run(
         typer.echo(json.dumps(result.to_dict(), indent=2))
     else:
         from mlfit.reporter.table import render_recommend_result
-        render_recommend_result(result, verbose=verbose)
+        render_recommend_result(result)
 
 
 def _handle_error(e: Exception, model_id: str, backend: str):

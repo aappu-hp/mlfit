@@ -19,7 +19,18 @@ GGUF_SIZES = {
 
 
 def estimate_weights_gb(num_params: float, dtype: str) -> float:
-    """Quick estimate: weight bytes only."""
+    """Estimate model weight memory as bytes-per-parameter × parameter count.
+
+    Does not include KV cache, activations, or framework overhead.
+
+    Args:
+        num_params: Total parameter count, e.g. 8e9 for an 8B model.
+        dtype: Weight dtype string — "float16", "bfloat16", "int4", "Q4_K_M", etc.
+               Unknown dtypes fall back to float16 (2 bytes/param).
+
+    Returns:
+        Estimated weight memory in GB.
+    """
     bpp = BYTES_PER_PARAM.get(dtype, 2.0)
     return (num_params * bpp) / 1e9
 
@@ -59,9 +70,17 @@ def estimate_vram_gb(model, max_seq_len: int = 4096, max_batch: int = 16) -> flo
 
 
 def estimate_gguf_size_gb(quant_type: str, param_billions: float) -> float:
-    """
-    Estimate GGUF file size in GB given quant type and parameter count.
-    Uses lookup table with linear interpolation for intermediate sizes.
+    """Estimate GGUF file size in GB given quant type and parameter count.
+
+    Uses a lookup table of known sizes at 7B, 13B, and 70B. For intermediate
+    sizes, the closest known anchor is scaled linearly by param ratio.
+
+    Args:
+        quant_type: GGUF quantization type, e.g. "Q4_K_M", "Q8_0", "Q2_K".
+        param_billions: Model size in billions of parameters, e.g. 7.0 or 13.0.
+
+    Returns:
+        Estimated GGUF file size in GB.
     """
     known_sizes = [7, 13, 70]
     closest = min(known_sizes, key=lambda x: abs(x - param_billions))
@@ -77,11 +96,20 @@ def estimate_gguf_size_gb(quant_type: str, param_billions: float) -> float:
 
 
 def check_fits(model, hardware) -> tuple:
-    """
-    Check if model fits in available VRAM/RAM.
+    """Check whether a model fits in available VRAM or system RAM.
+
+    For GPU hardware, compares the full VRAM estimate (weights + KV cache +
+    activations + overhead) against total_vram_gb × 0.95. For CPU-only hardware,
+    compares weight-only size against 70% of system RAM.
+
+    Args:
+        model: ModelProfile with architecture and dtype information.
+        hardware: HardwareProfile with total_vram_gb, ram_gb, and gpu_backend.
 
     Returns:
-        (fits: bool, estimated_vram_gb: float, headroom_gb: float)
+        Tuple of (fits, estimated_gb, headroom_gb) where fits is True when the
+        model is expected to load without OOM, estimated_gb is the predicted
+        memory requirement, and headroom_gb is positive when fits is True.
     """
     estimated = estimate_vram_gb(model, max_seq_len=4096, max_batch=1)
 

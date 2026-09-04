@@ -33,7 +33,7 @@ class ConfigSearcher:
         self._strategy = strategy
         self._callback = progress_callback or _noop_callback
 
-    def find_optimal(self, model, hw) -> Optional[BackendConfig]:
+    def find_optimal(self, model, hardware) -> Optional[BackendConfig]:
         """
         Return the most aggressive working config, or None if nothing loads.
 
@@ -43,14 +43,14 @@ class ConfigSearcher:
 
         Args:
             model: ModelProfile for the model being profiled.
-            hw: HardwareProfile describing available resources.
+            hardware: HardwareProfile describing available resources.
 
         Returns:
             The most aggressive BackendConfig that loaded cleanly, or None.
         """
         from mlfit.profiler.server import ServerManager
 
-        candidates = self._strategy.generate_config_candidates(model, hw)
+        candidates = self._strategy.generate_config_candidates(model, hardware)
         logger.info(
             "Config search: trying %d candidates for %s",
             len(candidates), model.model_id,

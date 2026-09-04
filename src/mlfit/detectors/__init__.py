@@ -1,9 +1,3 @@
-"""
-Hardware detection entry point for mlfit.
-
-Auto-detects GPU backend and builds a normalized HardwareProfile.
-Never imports torch at module level — it's slow. All imports are lazy.
-"""
 import logging
 
 from mlfit.core.models import HardwareProfile, GPUInfo
