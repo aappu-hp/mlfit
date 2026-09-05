@@ -5,8 +5,9 @@ def detect_cpu() -> dict:
     """
     import psutil
 
-    # RAM and disk
-    ram_gb = psutil.virtual_memory().total / 1e9
+    # RAM, swap and disk
+    vm = psutil.virtual_memory()
+    sw = psutil.swap_memory()
     disk_free_gb = psutil.disk_usage("/").free / 1e9
     cpu_cores = psutil.cpu_count(logical=False) or 1
     cpu_threads = psutil.cpu_count(logical=True) or cpu_cores
@@ -17,7 +18,10 @@ def detect_cpu() -> dict:
     return {
         "cpu_cores": cpu_cores,
         "cpu_threads": cpu_threads,
-        "ram_gb": ram_gb,
+        "ram_gb": vm.total / 1e9,
+        "ram_available_gb": vm.available / 1e9,
+        "swap_total_gb": sw.total / 1e9,
+        "swap_used_gb": sw.used / 1e9,
         "disk_free_gb": disk_free_gb,
         "has_avx": has_avx,
         "has_avx2": has_avx2,

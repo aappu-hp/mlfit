@@ -22,10 +22,46 @@ def _hf_hub_download(repo_id: str, filename: str) -> str:
     return hf_hub_download(repo_id=repo_id, filename=filename)
 
 
+def _hf_model_info(repo_id: str):
+    """
+    Thin wrapper around huggingface_hub.HfApi().model_info.
+
+    Module-level name so tests can patch it:
+        patch("mlfit.analyzers.hf_analyzer._hf_model_info", ...)
+    """
+    from huggingface_hub import HfApi
+    return HfApi().model_info(repo_id)
+
+
+def fetch_param_count(model_id: str) -> int | None:
+    """
+    Fetch the exact total parameter count from the model's safetensors metadata.
+
+    Metadata-only call (no weights downloaded). This is the same signal llmfit
+    stores as ``parameters_raw``.
+
+    Args:
+        model_id: HuggingFace model ID.
+
+    Returns:
+        Total parameter count, or None if the repo has no safetensors metadata
+        (e.g. GGUF-only repos) or the lookup fails.
+    """
+    try:
+        info = _hf_model_info(model_id)
+    except Exception as exc:
+        logger.debug("safetensors lookup failed for %s: %s", model_id, exc)
+        return None
+
+    safetensors = getattr(info, "safetensors", None)
+    total = getattr(safetensors, "total", None) if safetensors is not None else None
+    return int(total) if total else None
+
+
 def analyze_hf_model(model_id: str) -> ModelProfile:
     """
     Analyze a HuggingFace model without downloading weights.
-    Downloads only config.json (~5–10KB).
+    Checks local ModelCache first; falls back to HF Hub (config.json only, ~5–10KB).
 
     Args:
         model_id: HuggingFace model ID, e.g. "meta-llama/Llama-3-8B"
@@ -33,11 +69,23 @@ def analyze_hf_model(model_id: str) -> ModelProfile:
     Returns:
         ModelProfile with architecture info and size estimates
     """
-    logger.debug("Downloading config.json for %s", model_id)
-    config = _download_config(model_id)
-    logger.debug("Config downloaded successfully for %s", model_id)
+    from mlfit.cache.model_cache import get_default_cache
 
-    num_params = _estimate_params_from_config(config)
+    cache = get_default_cache()
+    cached = cache.get(model_id)
+    if cached is not None:
+        logger.debug("Loaded %s from local cache", model_id)
+        config = cached
+    else:
+        logger.debug("Downloading config.json for %s", model_id)
+        config = _download_config(model_id)
+        exact = fetch_param_count(model_id)
+        if exact:
+            config["_mlfit_params_total"] = exact
+        cache.save(model_id, config)
+        logger.debug("Config downloaded and cached for %s", model_id)
+
+    num_params = config.get("_mlfit_params_total") or estimate_params_from_config(config)
     dtype = _resolve_dtype(config)
     max_ctx = config.get("max_position_embeddings",
                 config.get("n_positions",
@@ -79,7 +127,7 @@ def _download_config(model_id: str) -> dict:
         raise ModelNotFoundError(model_id)
 
 
-def _estimate_params_from_config(config: dict) -> float:
+def estimate_params_from_config(config: dict) -> float:
     """
     Estimate parameter count from transformer architecture config.
 
@@ -87,6 +135,7 @@ def _estimate_params_from_config(config: dict) -> float:
       embedding_params + num_layers × (attention_params + FFN_params) + output_params
 
     This is approximate but accurate to within ~5% for most transformers.
+    Used as a fallback when exact safetensors metadata is unavailable.
     """
     num_layers = config.get("num_hidden_layers", config.get("n_layer", 32))
     hidden_size = config.get("hidden_size", config.get("n_embd", 4096))
@@ -113,6 +162,10 @@ def _estimate_params_from_config(config: dict) -> float:
     total = embedding + num_layers * per_layer + layer_norms
 
     return float(total)
+
+
+# Backwards-compatible private alias (pre-existing callers/tests patch this name).
+_estimate_params_from_config = estimate_params_from_config
 
 
 def _resolve_dtype(config: dict) -> str:

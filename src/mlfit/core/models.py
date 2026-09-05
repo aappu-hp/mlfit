@@ -31,6 +31,9 @@ class HardwareProfile:
     has_avx2: bool
     has_avx512: bool
     disk_free_gb: float
+    ram_available_gb: float = 0.0   # currently free system RAM
+    swap_total_gb: float = 0.0
+    swap_used_gb: float = 0.0
 
 
 @dataclass
